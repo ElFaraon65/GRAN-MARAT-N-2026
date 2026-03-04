@@ -1,0 +1,1646 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Maratón 2D · Carrera de atleta</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a3b2e;
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            touch-action: pan-y pinch-zoom;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #1a3b2e;
+            cursor: none;
+        }
+        .fullscreen-btn {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            width: 48px;
+            height: 48px;
+            background: rgba(0,0,0,0.4);
+            border-radius: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 100;
+            backdrop-filter: blur(2px);
+            border: 1px solid rgba(255,255,255,0.3);
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .fullscreen-btn:hover,
+        .fullscreen-btn:active {
+            background: rgba(0,0,0,0.7);
+        }
+        .fullscreen-btn.fade {
+            opacity: 0.3;
+        }
+        .fullscreen-btn svg {
+            width: 28px;
+            height: 28px;
+            stroke: white;
+            stroke-width: 2.2;
+            stroke-linecap: round;
+            fill: none;
+        }
+        .loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #1d4d33;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            z-index: 20;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    <div class="fullscreen-btn" id="fullscreenBtn" aria-label="Pantalla completa">
+        <svg viewBox="0 0 24 24">
+            <path d="M4 4 L9 4 M4 4 L4 9" />
+            <path d="M20 4 L15 4 M20 4 L20 9" />
+            <path d="M4 20 L9 20 M4 20 L4 15" />
+            <path d="M20 20 L15 20 M20 20 L20 15" />
+        </svg>
+    </div>
+
+    <div id="loadingScreen" class="loading">🏃 cargando imágenes...</div>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+            let isFullscreen = false;
+
+            function toggleFullscreen() {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        console.warn('Error al intentar entrar en pantalla completa:', err);
+                    });
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    }
+                }
+            }
+
+            document.addEventListener('fullscreenchange', () => {
+                isFullscreen = !!document.fullscreenElement;
+                if (isFullscreen) {
+                    fullscreenBtn.classList.add('fade');
+                } else {
+                    fullscreenBtn.classList.remove('fade');
+                }
+            });
+
+            function wakeUpButton() {
+                if (isFullscreen) {
+                    fullscreenBtn.classList.remove('fade');
+                }
+            }
+
+            function sleepButton() {
+                if (isFullscreen) {
+                    fullscreenBtn.classList.add('fade');
+                }
+            }
+
+            fullscreenBtn.addEventListener('touchstart', wakeUpButton);
+            fullscreenBtn.addEventListener('touchcancel', sleepButton);
+            fullscreenBtn.addEventListener('mousedown', wakeUpButton);
+            fullscreenBtn.addEventListener('mouseleave', sleepButton);
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+            // --- CONFIGURACIÓN ---
+            const CANVAS_W = 800;
+            const CANVAS_H = 400;
+
+            const PLAYER_HEIGHT = 140;
+            const PLAYER_SPEED = 5;
+            const GROUND_MARGIN = 165;
+            const GROUND_Y = CANVAS_H - PLAYER_HEIGHT - GROUND_MARGIN;
+            const POINT_Y = GROUND_Y + PLAYER_HEIGHT - 10;
+
+            let player = {
+                x: 0,
+                y: GROUND_Y,
+                width: 70,
+                height: PLAYER_HEIGHT
+            };
+
+            let spriteFrames = [];
+            let currentFrame = 0;
+            let facingLeft = false;
+
+            // Imágenes adicionales
+            let backgroundImg = new Image();
+            let playerSpriteImg = new Image();
+            let bateriaImg = new Image();
+            let menuImg = new Image();
+            // Iconos para selección de personajes
+            let iconBlue = new Image();
+            let iconRed = new Image();
+            let iconYellow = new Image();
+            let iconGreen = new Image();
+            // Imágenes de final
+            let finalBlue = new Image();
+            let finalRed = new Image();
+            let finalYellow = new Image();
+            let finalGreen = new Image();
+
+            let imagesLoaded = 0;
+            const totalImages = 11; // fondo, bateria, menu, 4 iconos, 4 finales
+
+            let worldWidth = 2000;
+            let cameraX = 0;
+
+            let points = [];
+            let currentPointIndex = 0;
+            let targetPointIndex = 0;
+            let isMoving = false;
+
+            let movingLeft = false;
+            let movingRight = false;
+
+            // --- VARIABLES DE ENERGÍA (con suavizado) ---
+            let energy = 0;               // valor mostrado (se suaviza)
+            let targetEnergy = 0;          // valor real al que se aproxima
+            let energyConsumeRate = 0;     // velocidad de consumo (puntos por frame)
+            let isConsuming = false;        // si está en fase de consumo post-quiz
+
+            // --- SISTEMA DE PREGUNTAS ---
+            let quizActive = false;
+            let quizPointIndex = -1;
+            let quizQuestions = [];         // respuestas correctas (letras)
+            let quizTextData = [];           // array de {question, options} para cada pregunta del punto actual
+            let quizUserAnswers = [];
+            let quizCurrentIndex = 0;
+            let quizCorrectCount = 0;
+            let quizFinished = false;
+
+            // --- ANIMACIÓN DE TRANSICIÓN ENTRE PREGUNTAS ---
+            let quizTransitionActive = false;
+            let quizTransitionProgress = 0; // 0 a 1
+            let quizTransitionOutgoingIndex = -1; // índice de la pregunta que sale
+            let quizTransitionIncomingIndex = -1; // índice de la nueva pregunta
+            let quizTransitionOutgoingAnswer = null; // respuesta dada (para mantener coherencia)
+
+            const TRANSITION_DURATION = 300; // ms
+
+            // Movimiento pendiente post-consumo
+            let pendingMove = null; // { tipo, direccion }
+
+            // --- VARIABLES PARA EL CÁLCULO DE ALTURA DE PREGUNTA ---
+            let questionLines = [];          // líneas en las que se dividió la pregunta actual
+            let questionHeight = 0;           // altura total de la pregunta (para desplazar opciones)
+            const questionMaxWidth = 600;     // ancho máximo para el texto de la pregunta
+            const questionLineHeight = 24;    // altura de línea para la pregunta
+
+            // --- NUEVAS VARIABLES PARA EL TEMPORIZADOR ---
+            let timerActive = false;           // si el temporizador está corriendo (durante quiz)
+            let timeLeft = 60;                 // segundos restantes (se ajusta dinámicamente)
+            let lastTimestamp = 0;               // para delta time
+            let penaltyActive = false;           // si está en penalización por tiempo agotado
+            let penaltyTimeLeft = 0;              // segundos restantes de penalización (5 minutos = 300)
+            const PENALTY_DURATION = 300;        // 5 minutos en segundos
+            let MAX_TIME = 60;                    // tiempo base, se recalcula por pregunta larga
+
+            // --- FEEDBACK Y ANIMACIONES ---
+            let feedback = {
+                active: false,
+                correctIndex: -1,
+                selectedIndex: -1,
+                selectedLetter: '',
+                startTime: 0,
+                duration: 500, // ms
+                callback: null
+            };
+
+            let lightningAnim = {
+                active: false,
+                fromX: 0, fromY: 0,
+                toX: 0, toY: 0,
+                progress: 0,
+                callback: null
+            };
+
+            let reverseLightning = {
+                active: false,
+                fromX: 0, fromY: 0,
+                toX: 0, toY: 0,
+                progress: 0,
+                callback: null
+            };
+            let reverseLightningTriggered = false;
+
+            // --- NUEVAS VARIABLES PARA EL MENÚ Y SELECCIÓN ---
+            let gameState = 'menu'; // 'menu', 'characterSelect', 'playing', 'victory'
+            let selectedColor = null; // 'Blue', 'Red', 'Yellow', 'Green'
+            let victoryImage = null; // imagen de final según color
+            let characterSelectIndex = -1; // 0-3 para iconos
+
+            // --- RESPUESTAS POR PUNTO (correctas) ---
+            const mainAnswers = [
+                ['C', 'C', 'A', 'B'], // punto principal 0 (primero)
+                ['B', 'B', 'C', 'B'], // punto principal 2 (segundo)
+                ['C', 'C', 'B', 'D'], // punto principal 4 (tercero)
+                ['A', 'B', 'B', 'C'], // punto principal 6 (cuarto)
+                // El quinto (índice 8) no tiene preguntas, es la meta
+            ];
+            const interAnswers = [
+                ['B'], // intermedio 1 (primero)
+                ['B'], // intermedio 3 (segundo)
+                ['B'], // intermedio 5 (tercero)
+                ['A'], // intermedio 7 (cuarto)
+            ];
+
+            // --- TEXTOS DE PREGUNTAS Y OPCIONES POR PUNTO ---
+            const quizTexts = {
+                // Punto principal 0 (índice 0)
+                0: [
+                    {
+                        question: "¿Por qué motivo el agua y el aceite no se mezclan?",
+                        options: [
+                            "a) Se repelen químicamente",
+                            "b) Densidad",
+                            "c) Polaridad",
+                            "d) No tiene explicación"
+                        ]
+                    },
+                    {
+                        question: "¿Si dejas caer una bala de cañón de 10kg y una pelota de tenis al mismo tiempo desde lo alto de una torre (en un lugar sin aire), ¿cuál llega primero al suelo?",
+                        options: [
+                            "a) La bala de cañón",
+                            "b) La pelota de tenis",
+                            "c) Ambas",
+                            "d) Depende"
+                        ]
+                    },
+                    {
+                        question: "Si la mantequilla está hecha de crema de nata proveniente de la vaca, ¿de qué está hecha la margarina?",
+                        options: [
+                            "a) Aceite",
+                            "b) Leche",
+                            "c) Agua",
+                            "d) N.A"
+                        ]
+                    },
+                    {
+                        question: "¿Cuál es un método natural y antiguo para proteger las semillas almacenadas (como frijol o maíz) de los gorgojos sin usar venenos o químicos?",
+                        options: [
+                            "a) Dejarlas bajo la lluvia para que se mojen",
+                            "b) Mezclarlos con ceniza de madera seca o arena fina",
+                            "c) Pintar cada semilla",
+                            "d) Ponerles música fuerte para ahuyentarlos"
+                        ]
+                    }
+                ],
+                // Punto principal 2 (segundo)
+                2: [
+                    {
+                        question: "Un corredor compite en una maratón por las calles de la ciudad. En el último tramo, realiza un esfuerzo increíble y logra adelantar al corredor que iba en la segunda posición. ¿En qué posición termina la carrera?",
+                        options: [
+                            "a) 1er lugar",
+                            "b) 2do lugar",
+                            "c) 3er lugar",
+                            "d) Depende de cuántos corredores queden detrás"
+                        ]
+                    },
+                    {
+                        question: "¿Que es lo primero que debes hacer si hueles a gas dentro de tu casa?",
+                        options: [
+                            "a) Encender la linterna para ver de dónde proviene",
+                            "b) Abrir todas las ventanas y puertas inmediatamente",
+                            "c) Llamar por celular desde la cocina",
+                            "d) Ponerle cinta adhesiva a la estufa"
+                        ]
+                    },
+                    {
+                        question: "Si un tren eléctrico se dirige hacia el norte, ¿hacía que dirección sale el humo?",
+                        options: [
+                            "a) Al sur",
+                            "b) Al norte",
+                            "c) A ningún lado",
+                            "d) N.A"
+                        ]
+                    },
+                    {
+                        question: "¿Cuál es el océano más grande del planeta tierra?",
+                        options: [
+                            "a) Océano Atlántico",
+                            "b) Océano Pacífico",
+                            "c) Océano Índico",
+                            "d) Océano Ártico"
+                        ]
+                    }
+                ],
+                // Punto principal 4 (tercero)
+                4: [
+                    {
+                        question: "¿Para que sirve principalmente una \"copia de seguridad\" (backup) en la nube?",
+                        options: [
+                            "a) Acelerar la velocidad de Internet",
+                            "b) Para borrar los archivos del dispositivo original",
+                            "c) Para recuperar tu información si pierdes o se daña tu dispositivo físico",
+                            "d) Para que otras personas puedan editar tus fotos sin permiso"
+                        ]
+                    },
+                    {
+                        question: "¿Cuál es la función principal del hígado en el cuerpo humano?",
+                        options: [
+                            "a) Producir insulina",
+                            "b) Sostener el peso",
+                            "c) Desintoxicar el organismo, procesar nutrientes y producir bilis para la digestión",
+                            "d) N.A"
+                        ]
+                    },
+                    {
+                        question: "Un médico le receta a un paciente tres pastillas y le indica que debe tomarse una cada media hora, ¿en cuánto tiempo se habrá tomado todas las pastillas?",
+                        options: [
+                            "a) Una hora y media",
+                            "b) Una hora",
+                            "c) 45 minutos",
+                            "d) 2 horas"
+                        ]
+                    },
+                    {
+                        question: "Sí se va la luz de toda la casa, pero los vecinos sí tienen energía, y has pagado la luz, ¿Dónde es lo primero que debes revisar?",
+                        options: [
+                            "a) El contador de la calle",
+                            "b) El enchufe del televisor",
+                            "c) El motor de la nevera",
+                            "d) El cuadro o tablero eléctrico para ver si alguno saltó"
+                        ]
+                    }
+                ],
+                // Punto principal 6 (cuarto)
+                6: [
+                    {
+                        question: "¿Cuál es la forma correcta de escribir una pregunta?",
+                        options: [
+                            "a) signos de interrogación al inicio y al final con tilde si ha de ser necesario",
+                            "b) signo de interrogación solo al final",
+                            "c) sin signos ortográficos",
+                            "d) signos de interrogación al inicio y final sin tilde de promedio"
+                        ]
+                    },
+                    {
+                        question: "Después de punto y seguido, ¿cómo debe empezar la siguiente palabra?",
+                        options: [
+                            "a) con letra minúscula",
+                            "b) siempre con la letra mayúscula",
+                            "c) como un número",
+                            "d) da igual, como uno quiera"
+                        ]
+                    },
+                    {
+                        question: "¿Para qué se usa la llave inglesa?",
+                        options: [
+                            "a) para arreglar enchufes eléctricos",
+                            "b) para apretar o aflojar casi tornillos de distintos tamaños",
+                            "c) para abrirse las dudas que se han trabado",
+                            "d) para colgar cortinas"
+                        ]
+                    },
+                    {
+                        question: "Más _______ pájaro en mano que ________ volando. Ojos que ____________ corazón que __________. Camarón ____________ se lo lleva la _________.",
+                        options: [
+                            "a) cientos - vale / no siente - no ven / corriente - que se duerme",
+                            "b) que se duerme - corriente / vale - cientos / no ven - no siente",
+                            "c) vale - cientos / no ven - no siente / que se duerme - corriente",
+                            "d) rápido - poco / brillan - se alegra / pequeño - red"
+                        ]
+                    }
+                ],
+                // Puntos intermedios
+                // Primer intermedio (índice 1)
+                1: [
+                    {
+                        question: "¿Por qué es peligroso dejar el cargador del celular conectado a la pared si no tiene el teléfono puesto?",
+                        options: [
+                            "a) Porque el cargador puede explotar en 5 minutos",
+                            "b) Porque sigue consumiendo energía (\"gasto vampiro\") y puede sobrecalentarse",
+                            "c) porque el celular se descarga a distancia",
+                            "d) no es peligroso en absoluto"
+                        ]
+                    }
+                ],
+                // Segundo intermedio (índice 3)
+                3: [
+                    {
+                        question: "Un bate y una pelota cuestan S/ 1.10 en total. El bate cuesta S/1.00 más que la pelota, ¿cuánto cuesta la pelota?",
+                        options: [
+                            "a) S/ 0.10",
+                            "b) S/ 0.05",
+                            "c) S/ 0.15",
+                            "d) S/ 1.00"
+                        ]
+                    }
+                ],
+                // Tercer intermedio (índice 5)
+                5: [
+                    {
+                        question: "En una cesta hay seis huevos. Si seis personas toman un huevo cada uno, ¿cómo es posible que al final quede un huevo en la cesta?",
+                        options: [
+                            "a) porque una persona mintió y no lo tomó",
+                            "b) porque la última persona se llevó la cesta con el huevo dentro",
+                            "c) porque los huevos eran de codorniz y que habían dos en una mano",
+                            "d) es matemáticamente imposible"
+                        ]
+                    }
+                ],
+                // Cuarto intermedio (índice 7)
+                7: [
+                    {
+                        question: "Si se te queda pegada una llave en una cerradura y no gira, ¿qué es lo mejor para lubricarla sin dañarla?",
+                        options: [
+                            "a) pintar los dientes de la llave con la punta del lápiz (el grafito es un lubricante seco)",
+                            "b) echarle agua con jabón",
+                            "c) echarle pegamento blanco",
+                            "d) calentar la llave con un encendedor"
+                        ]
+                    }
+                ]
+            };
+
+            // --- FUNCIÓN PARA INICIALIZAR PUNTOS ---
+            function initializePoints(worldWidth) {
+                points = [
+                    { x: 1040, y: POINT_Y },
+                    { x: 1525, y: POINT_Y },
+                    { x: 1860, y: POINT_Y },
+                    { x: 2250, y: POINT_Y },
+                    { x: 2760, y: POINT_Y },
+                    { x: 3380, y: POINT_Y },
+                    { x: 3990, y: POINT_Y },
+                    { x: 4525, y: POINT_Y },
+                    { x: 5100, y: POINT_Y }
+                ];
+            }
+
+            // --- DETECCIÓN DE SPRITES (igual) ---
+            function detectSpriteFrames(img) {
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCanvas.width = img.naturalWidth;
+                tempCanvas.height = img.naturalHeight;
+                tempCtx.drawImage(img, 0, 0);
+                
+                const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+                const data = imageData.data;
+                const w = tempCanvas.width;
+                const h = tempCanvas.height;
+                
+                const ALPHA_THRESHOLD = 50;
+                const visited = new Array(w * h).fill(false);
+                
+                const isOpaque = (x, y) => {
+                    if (x < 0 || x >= w || y < 0 || y >= h) return false;
+                    const index = (y * w + x) * 4 + 3;
+                    return data[index] >= ALPHA_THRESHOLD;
+                };
+                
+                const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+                const rects = [];
+                
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        const idx = y * w + x;
+                        if (!visited[idx] && isOpaque(x, y)) {
+                            const queue = [[x, y]];
+                            visited[idx] = true;
+                            
+                            let minX = x, maxX = x, minY = y, maxY = y;
+                            
+                            while (queue.length > 0) {
+                                const [cx, cy] = queue.shift();
+                                
+                                if (cx < minX) minX = cx;
+                                if (cx > maxX) maxX = cx;
+                                if (cy < minY) minY = cy;
+                                if (cy > maxY) maxY = cy;
+                                
+                                for (const [dx, dy] of dirs) {
+                                    const nx = cx + dx;
+                                    const ny = cy + dy;
+                                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                        const nidx = ny * w + nx;
+                                        if (!visited[nidx] && isOpaque(nx, ny)) {
+                                            visited[nidx] = true;
+                                            queue.push([nx, ny]);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            rects.push({
+                                x: minX,
+                                y: minY,
+                                width: maxX - minX + 1,
+                                height: maxY - minY + 1
+                            });
+                        }
+                    }
+                }
+                
+                const minArea = 100;
+                const filtered = rects.filter(r => r.width * r.height >= minArea);
+                filtered.sort((a, b) => a.x - b.x);
+                return filtered;
+            }
+
+            // --- CARGA DE IMÁGENES (modificada para incluir las nuevas) ---
+            function checkAllLoaded() {
+                imagesLoaded++;
+                if (imagesLoaded === totalImages) {
+                    if (backgroundImg.complete && backgroundImg.naturalWidth > 0) {
+                        worldWidth = backgroundImg.naturalWidth;
+                    } else {
+                        worldWidth = 2000;
+                    }
+                    initializePoints(worldWidth);
+                    document.getElementById('loadingScreen').style.opacity = '0';
+                    setTimeout(() => {
+                        document.getElementById('loadingScreen').style.display = 'none';
+                    }, 500);
+                }
+            }
+
+            // Asignar src y eventos de carga para todas las imágenes iniciales
+            backgroundImg.src = 'fondoMaraton.png';
+            backgroundImg.onload = checkAllLoaded;
+            backgroundImg.onerror = (e) => {
+                console.warn('No se pudo cargar fondoMaraton.png');
+                imagesLoaded++;
+                if (imagesLoaded === totalImages) { /* continuar */ }
+            };
+
+            bateriaImg.src = 'bateria.png';
+            bateriaImg.onload = checkAllLoaded;
+            bateriaImg.onerror = (e) => {
+                console.warn('No se pudo cargar bateria.png');
+                imagesLoaded++;
+            };
+
+            menuImg.src = 'menuMaraton.png';
+            menuImg.onload = checkAllLoaded;
+            menuImg.onerror = (e) => {
+                console.warn('No se pudo cargar menuMaraton.png');
+                imagesLoaded++;
+            };
+
+            // Iconos
+            iconBlue.src = 'iconPlayerManBlue.png';
+            iconBlue.onload = checkAllLoaded;
+            iconBlue.onerror = (e) => { imagesLoaded++; };
+            iconRed.src = 'iconPlayerManRed.png';
+            iconRed.onload = checkAllLoaded;
+            iconRed.onerror = (e) => { imagesLoaded++; };
+            iconYellow.src = 'iconPlayerManYellow.png';
+            iconYellow.onload = checkAllLoaded;
+            iconYellow.onerror = (e) => { imagesLoaded++; };
+            iconGreen.src = 'iconPlayerManGreen.png';
+            iconGreen.onload = checkAllLoaded;
+            iconGreen.onerror = (e) => { imagesLoaded++; };
+
+            // Finales
+            finalBlue.src = 'finalMaratonGanarManBlue.png';
+            finalBlue.onload = checkAllLoaded;
+            finalBlue.onerror = (e) => { imagesLoaded++; };
+            finalRed.src = 'finalMaratonGanarManRed.png';
+            finalRed.onload = checkAllLoaded;
+            finalRed.onerror = (e) => { imagesLoaded++; };
+            finalYellow.src = 'finalMaratonGanarManYellow.png';
+            finalYellow.onload = checkAllLoaded;
+            finalYellow.onerror = (e) => { imagesLoaded++; };
+            finalGreen.src = 'finalMaratonGanarManGreen.png';
+            finalGreen.onload = checkAllLoaded;
+            finalGreen.onerror = (e) => { imagesLoaded++; };
+
+            // El sprite del personaje se cargará después, no aquí
+
+            // --- FUNCIÓN PARA DIVIDIR TEXTO EN LÍNEAS ---
+            function wrapText(text, maxWidth, fontSize) {
+                ctx.save();
+                ctx.font = `bold ${fontSize}px "Segoe UI", sans-serif`;
+                const words = text.split(' ');
+                const lines = [];
+                let currentLine = words[0];
+
+                for (let i = 1; i < words.length; i++) {
+                    const testLine = currentLine + ' ' + words[i];
+                    const metrics = ctx.measureText(testLine);
+                    if (metrics.width < maxWidth) {
+                        currentLine = testLine;
+                    } else {
+                        lines.push(currentLine);
+                        currentLine = words[i];
+                    }
+                }
+                lines.push(currentLine);
+                ctx.restore();
+                return lines;
+            }
+
+            // --- FUNCIONES PARA EL SISTEMA DE PREGUNTAS ---
+            function startQuizForPoint(index) {
+                if (quizActive || quizFinished) return;
+                if (index === 8) {
+                    // Victoria
+                    gameState = 'victory';
+                    if (selectedColor === 'Blue') victoryImage = finalBlue;
+                    else if (selectedColor === 'Red') victoryImage = finalRed;
+                    else if (selectedColor === 'Yellow') victoryImage = finalYellow;
+                    else if (selectedColor === 'Green') victoryImage = finalGreen;
+                    return;
+                }
+                // Resetear animaciones
+                feedback.active = false;
+                lightningAnim.active = false;
+                reverseLightning.active = false;
+                reverseLightningTriggered = false;
+
+                quizPointIndex = index;
+                if (index % 2 === 0) { // principal
+                    let mainIndex = index / 2; // 0,1,2,3,4
+                    if (mainIndex < mainAnswers.length) {
+                        quizQuestions = mainAnswers[mainIndex];
+                        if (quizTexts[index]) {
+                            quizTextData = quizTexts[index];
+                        } else {
+                            quizTextData = quizQuestions.map((_, i) => ({
+                                question: `Pregunta ${i+1} del punto ${index}`,
+                                options: [
+                                    "A) Opción A",
+                                    "B) Opción B",
+                                    "C) Opción C",
+                                    "D) Opción D"
+                                ]
+                            }));
+                        }
+                    } else {
+                        quizQuestions = ['C', 'C', 'A', 'B'];
+                        quizTextData = quizQuestions.map((_, i) => ({
+                            question: `Pregunta ${i+1}`,
+                            options: ["A)", "B)", "C)", "D)"]
+                        }));
+                    }
+                } else { // intermedio
+                    let interIndex = (index - 1) / 2; // 0,1,2,3
+                    if (interIndex < interAnswers.length) {
+                        quizQuestions = interAnswers[interIndex];
+                        if (quizTexts[index]) {
+                            quizTextData = quizTexts[index];
+                        } else {
+                            quizTextData = [{
+                                question: `Pregunta del punto intermedio ${index}`,
+                                options: [
+                                    "A) Opción A",
+                                    "B) Opción B",
+                                    "C) Opción C",
+                                    "D) Opción D"
+                                ]
+                            }];
+                        }
+                    } else {
+                        quizQuestions = ['B'];
+                        quizTextData = [{
+                            question: "Pregunta",
+                            options: ["A)", "B)", "C)", "D)"]
+                        }];
+                    }
+                }
+                quizUserAnswers = new Array(quizQuestions.length).fill(null);
+                quizCurrentIndex = 0;
+                quizCorrectCount = 0;
+                quizActive = true;
+                quizFinished = false;
+
+                let extraTime = 0;
+                quizTextData.forEach(q => {
+                    const estimatedLines = Math.ceil(q.question.length / 50);
+                    if (estimatedLines > 2) {
+                        extraTime += (estimatedLines - 2) * 2;
+                    }
+                });
+                MAX_TIME = 60 + extraTime;
+                timeLeft = MAX_TIME;
+
+                timerActive = true;
+                lastTimestamp = performance.now();
+                penaltyActive = false;
+            }
+
+            function handleAnswerSelection(selectedLetter) {
+                if (!quizActive) return;
+                if (quizCurrentIndex >= quizQuestions.length) return;
+                if (quizTransitionActive) return;
+                if (penaltyActive) return;
+                if (feedback.active) return;
+                if (lightningAnim.active || reverseLightning.active) return;
+
+                const currentIndex = quizCurrentIndex;
+                const correctLetter = quizQuestions[currentIndex];
+                const selectedIndex = selectedLetter.charCodeAt(0) - 'A'.charCodeAt(0);
+                const correctIndex = correctLetter.charCodeAt(0) - 'A'.charCodeAt(0);
+
+                feedback.active = true;
+                feedback.correctIndex = correctIndex;
+                feedback.selectedIndex = selectedIndex;
+                feedback.selectedLetter = selectedLetter;
+                feedback.startTime = performance.now();
+
+                if (selectedLetter === correctLetter) {
+                    feedback.callback = () => {
+                        const startX = 100;
+                        const optionHeight = 58;
+                        const questionTotalHeight = questionLines.length * questionLineHeight;
+                        const startY = 45 + questionTotalHeight + 25;
+                        const fromX = startX + 300;
+                        const fromY = startY + selectedIndex * optionHeight + optionHeight/2;
+
+                        const margin = 20;
+                        const iconSize = 40;
+                        const toX = CANVAS_W - margin - iconSize/2;
+                        const toY = margin + iconSize/2;
+
+                        startLightning(fromX, fromY, toX, toY, () => {
+                            applyAnswer(selectedLetter, true);
+                        });
+                    };
+                } else {
+                    feedback.callback = () => {
+                        applyAnswer(selectedLetter, false);
+                    };
+                }
+            }
+
+            function startLightning(fromX, fromY, toX, toY, callback) {
+                lightningAnim.active = true;
+                lightningAnim.fromX = fromX;
+                lightningAnim.fromY = fromY;
+                lightningAnim.toX = toX;
+                lightningAnim.toY = toY;
+                lightningAnim.progress = 0;
+                lightningAnim.callback = callback;
+            }
+
+            function startReverseLightning(fromX, fromY, toX, toY, callback) {
+                reverseLightning.active = true;
+                reverseLightning.fromX = fromX;
+                reverseLightning.fromY = fromY;
+                reverseLightning.toX = toX;
+                reverseLightning.toY = toY;
+                reverseLightning.progress = 0;
+                reverseLightning.callback = callback;
+            }
+
+            function applyAnswer(selectedLetter, isCorrect) {
+                if (!quizActive) return;
+                if (quizCurrentIndex >= quizQuestions.length) return;
+
+                quizUserAnswers[quizCurrentIndex] = selectedLetter;
+
+                if (isCorrect) {
+                    quizCorrectCount++;
+                    targetEnergy += 10;
+                }
+
+                if (quizCurrentIndex + 1 < quizQuestions.length) {
+                    startTransition(quizCurrentIndex, quizCurrentIndex + 1, selectedLetter);
+                } else {
+                    quizCurrentIndex++;
+                    finishQuiz();
+                }
+            }
+
+            function startTransition(outgoingIdx, incomingIdx, answer) {
+                quizTransitionActive = true;
+                quizTransitionProgress = 0;
+                quizTransitionOutgoingIndex = outgoingIdx;
+                quizTransitionIncomingIndex = incomingIdx;
+                quizTransitionOutgoingAnswer = answer;
+
+                const startTime = performance.now();
+                function animateTransition(now) {
+                    const elapsed = now - startTime;
+                    quizTransitionProgress = Math.min(elapsed / TRANSITION_DURATION, 1);
+                    if (quizTransitionProgress < 1) {
+                        requestAnimationFrame(animateTransition);
+                    } else {
+                        quizTransitionActive = false;
+                        quizCurrentIndex = incomingIdx;
+                    }
+                }
+                requestAnimationFrame(animateTransition);
+            }
+
+            function finishQuiz() {
+                quizActive = false;
+                timerActive = false;
+                const total = quizQuestions.length;
+                const aciertos = quizCorrectCount;
+                let tipo = null;
+                let direccion = 'derecha';
+
+                if (quizPointIndex % 2 === 0) {
+                    if (aciertos === 0) {
+                        tipo = 'simple';
+                    } else if (aciertos === 2) {
+                        tipo = 'double';
+                    } else if (aciertos === 4) {
+                        tipo = 'hold';
+                    } else {
+                        tipo = 'simple';
+                    }
+                } else {
+                    if (aciertos === 0) {
+                        tipo = 'simple';
+                        direccion = 'izquierda';
+                    } else if (aciertos === 1) {
+                        tipo = 'double';
+                    } else {
+                        tipo = 'simple';
+                    }
+                }
+
+                pendingMove = { tipo, direccion };
+                startEnergyConsumption();
+            }
+
+            function startEnergyConsumption() {
+                if (targetEnergy <= 0) {
+                    executePendingMove();
+                    return;
+                }
+                isConsuming = true;
+                energyConsumeRate = targetEnergy / 120;
+            }
+
+            function executePendingMove() {
+                if (!pendingMove) return;
+                const { tipo, direccion } = pendingMove;
+                pendingMove = null;
+                isConsuming = false;
+
+                if (tipo === 'simple' && direccion === 'derecha') {
+                    setTimeout(() => {
+                        startQuizForPoint(quizPointIndex);
+                    }, 2000);
+                    return;
+                }
+
+                let nuevoIndice = quizPointIndex;
+                if (direccion === 'derecha') {
+                    if (tipo === 'double') {
+                        if (quizPointIndex % 2 === 0) {
+                            if (quizPointIndex + 1 < points.length) nuevoIndice = quizPointIndex + 1;
+                        } else {
+                            if (quizPointIndex + 1 < points.length) nuevoIndice = quizPointIndex + 1;
+                        }
+                    } else if (tipo === 'hold') {
+                        if (quizPointIndex % 2 === 0) {
+                            if (quizPointIndex + 2 < points.length) nuevoIndice = quizPointIndex + 2;
+                        } else {
+                            if (quizPointIndex + 1 < points.length) nuevoIndice = quizPointIndex + 1;
+                        }
+                    }
+                } else {
+                    if (tipo === 'simple') {
+                        if (quizPointIndex % 2 === 1) {
+                            if (quizPointIndex - 1 >= 0) nuevoIndice = quizPointIndex - 1;
+                        }
+                    } else if (tipo === 'double') {
+                        if (quizPointIndex % 2 === 0) {
+                            if (quizPointIndex - 1 >= 0) nuevoIndice = quizPointIndex - 1;
+                        } else {
+                            if (quizPointIndex - 1 >= 0) nuevoIndice = quizPointIndex - 1;
+                        }
+                    } else if (tipo === 'hold') {
+                        if (quizPointIndex % 2 === 0) {
+                            if (quizPointIndex - 2 >= 0) nuevoIndice = quizPointIndex - 2;
+                        } else {
+                            if (quizPointIndex - 1 >= 0) nuevoIndice = quizPointIndex - 1;
+                        }
+                    }
+                }
+
+                if (nuevoIndice !== quizPointIndex && nuevoIndice >= 0 && nuevoIndice < points.length) {
+                    targetPointIndex = nuevoIndice;
+                    isMoving = true;
+                    movingLeft = (direccion === 'izquierda');
+                    movingRight = (direccion === 'derecha');
+                    facingLeft = movingLeft;
+                }
+            }
+
+            // --- MANEJO DE TOQUES EN EL CANVAS (adaptado para menú y selección) ---
+            function handleCanvasTouch(e) {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let clientX, clientY;
+                if (e.touches) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                } else {
+                    clientX = e.clientX;
+                    clientY = e.clientY;
+                }
+                const canvasX = (clientX - rect.left) * scaleX;
+                const canvasY = (clientY - rect.top) * scaleY;
+
+                if (gameState === 'menu') {
+                    // Cualquier toque pasa a selección de personajes
+                    gameState = 'characterSelect';
+                } else if (gameState === 'characterSelect') {
+                    // Detectar toque en los iconos (4 en fila)
+                    const iconSize = 80;
+                    const startX = (CANVAS_W - 4 * iconSize - 3 * 20) / 2;
+                    const startY = 150;
+                    const spacing = iconSize + 20;
+                    for (let i = 0; i < 4; i++) {
+                        const x = startX + i * spacing;
+                        const y = startY;
+                        if (canvasX >= x && canvasX < x + iconSize && canvasY >= y && canvasY < y + iconSize) {
+                            characterSelectIndex = i;
+                            break;
+                        }
+                    }
+                    // Detectar toque en el botón "SELECCIONAR"
+                    const btnX = 250;
+                    const btnY = 300;
+                    const btnW = 300;
+                    const btnH = 60;
+                    if (canvasX >= btnX && canvasX < btnX + btnW && canvasY >= btnY && canvasY < btnY + btnH) {
+                        if (characterSelectIndex !== -1) {
+                            const colors = ['Blue', 'Red', 'Yellow', 'Green'];
+                            selectedColor = colors[characterSelectIndex];
+                            playerSpriteImg.src = 'playerMan' + selectedColor + '.png';
+                            playerSpriteImg.onload = () => {
+                                spriteFrames = detectSpriteFrames(playerSpriteImg);
+                                if (spriteFrames.length !== 2) {
+                                    const totalW = playerSpriteImg.naturalWidth;
+                                    const halfW = Math.floor(totalW / 2);
+                                    spriteFrames = [
+                                        { x: 0, y: 0, width: halfW, height: playerSpriteImg.naturalHeight },
+                                        { x: halfW, y: 0, width: totalW - halfW, height: playerSpriteImg.naturalHeight }
+                                    ];
+                                }
+                                if (spriteFrames.length > 0) {
+                                    const rect = spriteFrames[0];
+                                    player.width = (rect.width / rect.height) * PLAYER_HEIGHT;
+                                }
+                                gameState = 'playing';
+                                player.x = points[0].x - player.width / 2;
+                                currentPointIndex = 0;
+                                targetPointIndex = 0;
+                                energy = 0;
+                                targetEnergy = 0;
+                                isMoving = false;
+                                quizActive = false;
+                                quizFinished = false;
+                                penaltyActive = false;
+                                timerActive = false;
+                            };
+                            playerSpriteImg.onerror = () => {
+                                console.warn('No se pudo cargar el sprite del personaje');
+                                playerSpriteImg.src = 'playerManBlue.png';
+                            };
+                        }
+                    }
+                } else if (gameState === 'playing') {
+                    if (!quizActive) return;
+                    if (quizTransitionActive) return;
+                    if (penaltyActive) return;
+                    if (feedback.active) return;
+                    if (lightningAnim.active || reverseLightning.active) return;
+
+                    const optionHeight = 58;
+                    const startX = 100;
+                    const optionWidth = 600;
+                    const questionTotalHeight = questionLines.length * questionLineHeight;
+                    const startY = 45 + questionTotalHeight + 25;
+
+                    for (let i = 0; i < 4; i++) {
+                        const y = startY + i * optionHeight;
+                        if (canvasY >= y && canvasY < y + optionHeight && canvasX >= startX && canvasX < startX + optionWidth) {
+                            const letras = ['A', 'B', 'C', 'D'];
+                            handleAnswerSelection(letras[i]);
+                            break;
+                        }
+                    }
+                } else if (gameState === 'victory') {
+                    gameState = 'menu';
+                    characterSelectIndex = -1;
+                    selectedColor = null;
+                }
+            }
+
+            canvas.addEventListener('touchstart', handleCanvasTouch, { passive: false });
+            canvas.addEventListener('mousedown', handleCanvasTouch);
+
+            // --- LÓGICA DE MOVIMIENTO Y CÁMARA (solo en playing) ---
+            function update() {
+                if (gameState !== 'playing') return;
+
+                const previousFrame = currentFrame;
+
+                if (timerActive) {
+                    const now = performance.now();
+                    const delta = (now - lastTimestamp) / 1000;
+                    lastTimestamp = now;
+                    timeLeft -= delta;
+                    if (timeLeft <= 0) {
+                        timeLeft = 0;
+                        timerActive = false;
+                        quizActive = false;
+                        quizTransitionActive = false;
+                        penaltyActive = true;
+                        penaltyTimeLeft = PENALTY_DURATION;
+                        lastTimestamp = now;
+                    }
+                }
+
+                if (penaltyActive) {
+                    const now = performance.now();
+                    const delta = (now - lastTimestamp) / 1000;
+                    lastTimestamp = now;
+                    penaltyTimeLeft -= delta;
+                    if (penaltyTimeLeft <= 0) {
+                        penaltyActive = false;
+                        startQuizForPoint(quizPointIndex);
+                    }
+                }
+
+                if (feedback.active) {
+                    const now = performance.now();
+                    if (now - feedback.startTime >= feedback.duration) {
+                        feedback.active = false;
+                        if (feedback.callback) {
+                            feedback.callback();
+                            feedback.callback = null;
+                        }
+                    }
+                }
+
+                if (lightningAnim.active) {
+                    lightningAnim.progress += 0.02;
+                    if (lightningAnim.progress >= 1) {
+                        lightningAnim.active = false;
+                        if (lightningAnim.callback) {
+                            lightningAnim.callback();
+                            lightningAnim.callback = null;
+                        }
+                    }
+                }
+
+                if (reverseLightning.active) {
+                    reverseLightning.progress += 0.02;
+                    if (reverseLightning.progress >= 1) {
+                        reverseLightning.active = false;
+                        if (reverseLightning.callback) {
+                            reverseLightning.callback();
+                            reverseLightning.callback = null;
+                        }
+                    }
+                }
+
+                if (isMoving) {
+                    let targetX = points[targetPointIndex].x - player.width / 2;
+                    let dx = targetX - player.x;
+                    let step = PLAYER_SPEED;
+                    if (Math.abs(dx) <= step) {
+                        player.x = targetX;
+                        isMoving = false;
+                        movingLeft = false;
+                        movingRight = false;
+                        currentPointIndex = targetPointIndex;
+                    } else {
+                        player.x += (dx > 0 ? step : -step);
+                    }
+                } else {
+                    movingLeft = false;
+                    movingRight = false;
+                }
+
+                if (!isMoving && !quizActive && !isConsuming && !pendingMove && !quizFinished && !penaltyActive) {
+                    startQuizForPoint(currentPointIndex);
+                }
+
+                if (isConsuming && targetEnergy > 0) {
+                    targetEnergy -= energyConsumeRate;
+                    if (targetEnergy < 0) targetEnergy = 0;
+                    if (targetEnergy <= 0) {
+                        targetEnergy = 0;
+                        const noMovement = pendingMove && pendingMove.tipo === 'simple' && pendingMove.direccion === 'derecha';
+                        if (!noMovement && !reverseLightning.active && !reverseLightningTriggered) {
+                            reverseLightningTriggered = true;
+                            const margin = 20;
+                            const iconSize = 40;
+                            const fromX = CANVAS_W - margin - iconSize/2;
+                            const fromY = margin + iconSize/2;
+                            const playerCanvasX = player.x - cameraX + player.width/2;
+                            const playerCanvasY = player.y + player.height/2;
+                            startReverseLightning(fromX, fromY, playerCanvasX, playerCanvasY, () => {
+                                reverseLightningTriggered = false;
+                                executePendingMove();
+                            });
+                        } else {
+                            executePendingMove();
+                        }
+                    }
+                }
+
+                energy += (targetEnergy - energy) * 0.1;
+
+                if (movingLeft && !movingRight) {
+                    currentFrame = 1;
+                    facingLeft = true;
+                } else if (movingRight && !movingLeft) {
+                    currentFrame = 1;
+                    facingLeft = false;
+                } else {
+                    currentFrame = 0;
+                }
+
+                if (previousFrame !== currentFrame && spriteFrames.length > currentFrame) {
+                    const rect = spriteFrames[currentFrame];
+                    const newWidth = (rect.width / rect.height) * PLAYER_HEIGHT;
+                    const centerX = player.x + player.width / 2;
+                    player.width = newWidth;
+                    player.x = centerX - player.width / 2;
+                }
+
+                if (player.x < 0) player.x = 0;
+                if (player.x + player.width > worldWidth) player.x = worldWidth - player.width;
+
+                let targetCamX;
+                if (!facingLeft) {
+                    targetCamX = player.x + player.width / 2 - CANVAS_W / 3;
+                } else {
+                    targetCamX = player.x + player.width / 2 - 2 * CANVAS_W / 3;
+                }
+                targetCamX = Math.max(0, Math.min(targetCamX, worldWidth - CANVAS_W));
+                cameraX = targetCamX;
+            }
+
+            // --- DIBUJADO ---
+            function draw() {
+                ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+                if (gameState === 'menu') {
+                    if (menuImg.complete && menuImg.naturalWidth > 0) {
+                        ctx.drawImage(menuImg, 0, 0, CANVAS_W, CANVAS_H);
+                    } else {
+                        ctx.fillStyle = '#2a5f3a';
+                        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                        ctx.font = 'bold 36px sans-serif';
+                        ctx.fillStyle = 'white';
+                        ctx.fillText('MARATÓN 2D', 200, 200);
+                        ctx.font = '24px sans-serif';
+                        ctx.fillText('Toca para comenzar', 250, 300);
+                    }
+                    return;
+                }
+
+                if (gameState === 'characterSelect') {
+                    ctx.fillStyle = '#2a5f3a';
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    
+                    ctx.font = 'bold 32px sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('Selecciona tu personaje', 150, 80);
+
+                    const iconSize = 80;
+                    const startX = (CANVAS_W - 4 * iconSize - 3 * 20) / 2;
+                    const startY = 150;
+                    const spacing = iconSize + 20;
+                    const icons = [iconBlue, iconRed, iconYellow, iconGreen];
+                    for (let i = 0; i < 4; i++) {
+                        const x = startX + i * spacing;
+                        const y = startY;
+                        if (icons[i].complete && icons[i].naturalWidth > 0) {
+                            ctx.drawImage(icons[i], x, y, iconSize, iconSize);
+                        } else {
+                            ctx.fillStyle = '#888';
+                            ctx.fillRect(x, y, iconSize, iconSize);
+                        }
+                        if (characterSelectIndex === i) {
+                            ctx.strokeStyle = '#FFD700';
+                            ctx.lineWidth = 6;
+                            ctx.strokeRect(x-3, y-3, iconSize+6, iconSize+6);
+                        }
+                    }
+
+                    const btnX = 250;
+                    const btnY = 300;
+                    const btnW = 300;
+                    const btnH = 60;
+                    ctx.fillStyle = characterSelectIndex !== -1 ? '#4CAF50' : '#888';
+                    ctx.fillRect(btnX, btnY, btnW, btnH);
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(btnX, btnY, btnW, btnH);
+                    ctx.font = 'bold 28px sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('SELECCIONAR', btnX + 40, btnY + 45);
+
+                    return;
+                }
+
+                if (gameState === 'victory') {
+                    if (victoryImage && victoryImage.complete && victoryImage.naturalWidth > 0) {
+                        ctx.drawImage(victoryImage, 0, 0, CANVAS_W, CANVAS_H);
+                    } else {
+                        ctx.fillStyle = '#000';
+                        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                        ctx.font = 'bold 36px sans-serif';
+                        ctx.fillStyle = 'gold';
+                        ctx.fillText('¡VICTORIA!', 250, 200);
+                    }
+                    ctx.font = '20px sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('Toca para volver al menú', 250, 350);
+                    return;
+                }
+
+                // --- A partir de aquí, gameState === 'playing' ---
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+
+                // Fondo
+                if (backgroundImg.complete && backgroundImg.naturalWidth > 0) {
+                    let offsetY = 0;
+                    if (backgroundImg.naturalHeight > CANVAS_H) {
+                        offsetY = backgroundImg.naturalHeight - CANVAS_H;
+                    }
+                    ctx.drawImage(
+                        backgroundImg,
+                        cameraX, offsetY, CANVAS_W, CANVAS_H,
+                        0, 0, CANVAS_W, CANVAS_H
+                    );
+                } else {
+                    const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+                    grad.addColorStop(0, '#86b486');
+                    grad.addColorStop(0.7, '#5b8c5a');
+                    grad.addColorStop(1, '#3f6140');
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    ctx.strokeStyle = '#fff3c9';
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([20, 30]);
+                    ctx.beginPath();
+                    ctx.moveTo(0, GROUND_Y + PLAYER_HEIGHT - 10);
+                    ctx.lineTo(CANVAS_W, GROUND_Y + PLAYER_HEIGHT - 10);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+
+                // Personaje
+                if (playerSpriteImg && playerSpriteImg.complete && playerSpriteImg.naturalWidth > 0 && spriteFrames.length > currentFrame) {
+                    const rect = spriteFrames[currentFrame];
+                    
+                    ctx.save();
+                    ctx.translate(player.x - cameraX, player.y);
+                    
+                    if (facingLeft) {
+                        ctx.scale(-1, 1);
+                        ctx.translate(-player.width, 0);
+                    }
+                    
+                    ctx.drawImage(
+                        playerSpriteImg,
+                        rect.x, rect.y, rect.width, rect.height,
+                        0, 0, player.width, player.height
+                    );
+                    
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = currentFrame === 0 ? '#2b7ddd' : '#dd3b2b';
+                    ctx.shadowColor = '#000';
+                    ctx.shadowBlur = 10;
+                    ctx.fillRect(player.x - cameraX, player.y, player.width, player.height);
+                    ctx.shadowBlur = 0;
+                    ctx.font = 'bold 24px monospace';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText(currentFrame === 0 ? '😐' : '🏃', player.x - cameraX + 15, player.y + 50);
+                }
+
+                // Sombra
+                ctx.fillStyle = '#1e2b1e80';
+                ctx.beginPath();
+                ctx.ellipse(player.x - cameraX + player.width/2, player.y + player.height - 6, player.width/3, 8, 0, 0, Math.PI*2);
+                ctx.fill();
+
+                // --- DIBUJO DEL QUIZ (con texto ajustado) ---
+                if (quizActive || quizTransitionActive) {
+                    // Fondo oscuro
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+                    const startX = 100;
+                    const optionWidth = 600;
+                    const optionHeight = 58;
+                    const fontSizeQuestion = 18;
+
+                    if (quizTransitionActive) {
+                        // Dibujar pregunta saliente (outgoing)
+                        const outProgress = quizTransitionProgress;
+                        ctx.save();
+                        const outX = -outProgress * 200;
+                        const outScale = 1 - outProgress * 0.2;
+                        const outAlpha = 1 - outProgress;
+                        ctx.translate(outX, 0);
+                        ctx.scale(outScale, outScale);
+                        ctx.globalAlpha = outAlpha;
+
+                        const outData = quizTextData[quizTransitionOutgoingIndex];
+                        const outLines = wrapText(outData.question, questionMaxWidth, fontSizeQuestion);
+                        const outQuestionHeight = outLines.length * questionLineHeight;
+
+                        ctx.font = `bold ${fontSizeQuestion}px "Segoe UI", sans-serif`;
+                        ctx.fillStyle = 'white';
+                        let lineY = 45;
+                        for (let line of outLines) {
+                            ctx.fillText(line, startX, lineY);
+                            lineY += questionLineHeight;
+                        }
+                        ctx.font = '16px "Segoe UI", sans-serif';
+                        ctx.fillText(`Pregunta ${quizTransitionOutgoingIndex+1} de ${quizQuestions.length}`, startX, lineY + 10);
+
+                        const optionsStartY = lineY + 25;
+                        for (let i = 0; i < 4; i++) {
+                            const y = optionsStartY + i * optionHeight;
+                            ctx.fillStyle = '#3a6ea5';
+                            ctx.fillRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.strokeStyle = 'white';
+                            ctx.lineWidth = 3;
+                            ctx.strokeRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.font = 'bold 15px "Segoe UI", sans-serif';
+                            ctx.fillStyle = 'white';
+                            ctx.fillText(outData.options[i], startX + 20, y + 40);
+                        }
+                        ctx.restore();
+
+                        // Dibujar pregunta entrante (incoming)
+                        ctx.save();
+                        const inProgress = quizTransitionProgress;
+                        const inX = (1 - inProgress) * 200;
+                        const inScale = 0.8 + inProgress * 0.2;
+                        const inAlpha = inProgress;
+                        ctx.translate(inX, 0);
+                        ctx.scale(inScale, inScale);
+                        ctx.globalAlpha = inAlpha;
+
+                        const inData = quizTextData[quizTransitionIncomingIndex];
+                        const inLines = wrapText(inData.question, questionMaxWidth, fontSizeQuestion);
+                        const inQuestionHeight = inLines.length * questionLineHeight;
+
+                        ctx.font = `bold ${fontSizeQuestion}px "Segoe UI", sans-serif`;
+                        ctx.fillStyle = 'white';
+                        lineY = 45;
+                        for (let line of inLines) {
+                            ctx.fillText(line, startX, lineY);
+                            lineY += questionLineHeight;
+                        }
+                        ctx.font = '16px "Segoe UI", sans-serif';
+                        ctx.fillText(`Pregunta ${quizTransitionIncomingIndex+1} de ${quizQuestions.length}`, startX, lineY + 10);
+
+                        const optionsStartYin = lineY + 25;
+                        for (let i = 0; i < 4; i++) {
+                            const y = optionsStartYin + i * optionHeight;
+                            ctx.fillStyle = '#3a6ea5';
+                            ctx.fillRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.strokeStyle = 'white';
+                            ctx.lineWidth = 3;
+                            ctx.strokeRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.font = 'bold 15px "Segoe UI", sans-serif';
+                            ctx.fillStyle = 'white';
+                            ctx.fillText(inData.options[i], startX + 20, y + 40);
+                        }
+                        ctx.restore();
+
+                        questionLines = inLines;
+                        questionHeight = inQuestionHeight;
+                    } else {
+                        // Quiz activo sin transición
+                        const currentData = quizTextData[quizCurrentIndex];
+                        questionLines = wrapText(currentData.question, questionMaxWidth, fontSizeQuestion);
+                        questionHeight = questionLines.length * questionLineHeight;
+
+                        ctx.font = `bold ${fontSizeQuestion}px "Segoe UI", sans-serif`;
+                        ctx.fillStyle = 'white';
+                        let lineY = 45;
+                        for (let line of questionLines) {
+                            ctx.fillText(line, startX, lineY);
+                            lineY += questionLineHeight;
+                        }
+                        ctx.font = '16px "Segoe UI", sans-serif';
+                        ctx.fillText(`Pregunta ${quizCurrentIndex+1} de ${quizQuestions.length}`, startX, lineY + 10);
+
+                        const optionsStartY = lineY + 25;
+                        for (let i = 0; i < 4; i++) {
+                            const y = optionsStartY + i * optionHeight;
+                            if (feedback.active) {
+                                if (i === feedback.correctIndex) {
+                                    ctx.fillStyle = '#2e8b57';
+                                } else if (feedback.selectedIndex !== feedback.correctIndex) {
+                                    ctx.fillStyle = '#b22222';
+                                } else {
+                                    ctx.fillStyle = '#3a6ea5';
+                                }
+                            } else {
+                                ctx.fillStyle = '#3a6ea5';
+                            }
+                            ctx.fillRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.strokeStyle = 'white';
+                            ctx.lineWidth = 3;
+                            ctx.strokeRect(startX, y, optionWidth, optionHeight-5);
+                            ctx.font = 'bold 15px "Segoe UI", sans-serif';
+                            ctx.fillStyle = 'white';
+                            ctx.fillText(currentData.options[i], startX + 20, y + 40);
+                        }
+                    }
+
+                    // --- DIBUJO DEL RELOJ (lado izquierdo) Y BARRA VERTICAL ---
+                    if (quizActive) {
+                        const relojX = 50;
+                        const relojY = 60;
+                        const radio = 25;
+
+                        const barX = relojX - 12;
+                        const barY = relojY - 5;
+                        const barW = 24;
+                        const barH = 300;
+                        const borderRadius = barW / 2;
+                        ctx.fillStyle = '#555';
+                        ctx.beginPath();
+                        ctx.roundRect(barX, barY, barW, barH, borderRadius);
+                        ctx.fill();
+                        const progress = timeLeft / MAX_TIME;
+                        const fillHeight = barH * (1 - Math.sqrt(1 - progress));
+                        ctx.fillStyle = '#ffaa00';
+                        if (fillHeight > 0) {
+                            ctx.beginPath();
+                            ctx.roundRect(barX, barY + barH - fillHeight, barW, fillHeight, borderRadius);
+                            ctx.fill();
+                        }
+
+                        ctx.save();
+                        ctx.shadowColor = '#ffd700';
+                        ctx.shadowBlur = 15;
+                        ctx.beginPath();
+                        ctx.arc(relojX, relojY, radio, 0, 2 * Math.PI);
+                        ctx.fillStyle = '#ffd700';
+                        ctx.fill();
+                        ctx.strokeStyle = '#b8860b';
+                        ctx.lineWidth = 3;
+                        ctx.stroke();
+                        ctx.shadowBlur = 0;
+                        ctx.translate(relojX, relojY);
+                        ctx.save();
+                        const angle = -Math.PI/2 - (timeLeft / MAX_TIME) * 2 * Math.PI * 70;
+                        ctx.rotate(angle);
+                        ctx.beginPath();
+                        ctx.moveTo(0, 0);
+                        ctx.lineTo(radio * 0.8, 0);
+                        ctx.strokeStyle = '#000';
+                        ctx.lineWidth = 3;
+                        ctx.stroke();
+                        ctx.restore();
+                        ctx.save();
+                        const hourAngle = -Math.PI/2 - (timeLeft / MAX_TIME) * 2 * Math.PI * 70 / 12;
+                        ctx.rotate(hourAngle);
+                        ctx.beginPath();
+                        ctx.moveTo(0, 0);
+                        ctx.lineTo(radio * 0.5, 0);
+                        ctx.strokeStyle = '#000';
+                        ctx.lineWidth = 4;
+                        ctx.stroke();
+                        ctx.restore();
+                        ctx.restore();
+                    }
+                } else if (penaltyActive) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    ctx.font = 'bold 24px "Segoe UI", sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('Tiempo agotado. Penalización:', 150, 150);
+                    const minutos = Math.floor(penaltyTimeLeft / 60);
+                    const segundos = Math.floor(penaltyTimeLeft % 60);
+                    ctx.fillText(`${minutos}:${segundos < 10 ? '0' : ''}${segundos} restantes`, 200, 200);
+                } else if (isConsuming) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    ctx.font = 'bold 24px "Segoe UI", sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('Consumiendo energía...', 200, 200);
+                } else if (pendingMove && pendingMove.tipo === 'simple' && pendingMove.direccion === 'derecha') {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    ctx.font = 'bold 24px "Segoe UI", sans-serif';
+                    ctx.fillStyle = 'white';
+                    ctx.fillText('Sin avance, reintentando...', 200, 200);
+                }
+
+                // --- MARCADOR DE BATERÍA ---
+                const margin = 20;
+                const iconSize = 40;
+                const textX = CANVAS_W - margin - iconSize - 40;
+                const iconX = CANVAS_W - margin - iconSize;
+                const y = margin;
+
+                ctx.font = 'bold 28px "Segoe UI", monospace';
+                ctx.fillStyle = 'white';
+                ctx.shadowColor = '#000';
+                ctx.shadowBlur = 4;
+                ctx.fillText(Math.round(energy).toString(), textX, y + 32);
+                ctx.shadowBlur = 0;
+
+                if (bateriaImg.complete && bateriaImg.naturalWidth > 0) {
+                    ctx.drawImage(bateriaImg, iconX, y, iconSize, iconSize);
+                } else {
+                    ctx.fillStyle = '#888';
+                    ctx.fillRect(iconX, y, iconSize, iconSize);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(iconX, y, iconSize, iconSize);
+                }
+
+                // Dibujar rayos
+                if (lightningAnim.active) {
+                    const x = lightningAnim.fromX + (lightningAnim.toX - lightningAnim.fromX) * lightningAnim.progress;
+                    const y = lightningAnim.fromY + (lightningAnim.toY - lightningAnim.fromY) * lightningAnim.progress;
+                    ctx.font = '40px "Segoe UI", sans-serif';
+                    ctx.fillStyle = '#FFD700';
+                    ctx.shadowColor = '#FFA500';
+                    ctx.shadowBlur = 10;
+                    ctx.fillText('⚡', x - 20, y - 20);
+                    ctx.shadowBlur = 0;
+                }
+                if (reverseLightning.active) {
+                    const x = reverseLightning.fromX + (reverseLightning.toX - reverseLightning.fromX) * reverseLightning.progress;
+                    const y = reverseLightning.fromY + (reverseLightning.toY - reverseLightning.fromY) * reverseLightning.progress;
+                    ctx.font = '40px "Segoe UI", sans-serif';
+                    ctx.fillStyle = '#FFD700';
+                    ctx.shadowColor = '#FFA500';
+                    ctx.shadowBlur = 10;
+                    ctx.fillText('⚡', x - 20, y - 20);
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                if (w < 2 * r) r = w / 2;
+                if (h < 2 * r) r = h / 2;
+                this.moveTo(x + r, y);
+                this.lineTo(x + w - r, y);
+                this.quadraticCurveTo(x + w, y, x + w, y + r);
+                this.lineTo(x + w, y + h - r);
+                this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                this.lineTo(x + r, y + h);
+                this.quadraticCurveTo(x, y + h, x, y + h - r);
+                this.lineTo(x, y + r);
+                this.quadraticCurveTo(x, y, x + r, y);
+                this.closePath();
+                return this;
+            };
+
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            requestAnimationFrame(gameLoop);
+        })();
+    </script>
+</body>
+</html>
